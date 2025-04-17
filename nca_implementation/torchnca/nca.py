@@ -90,6 +90,10 @@ class NCANonlinear:
       numerical stability trick.
     """
     exp = torch.exp(x)
+
+    sums = exp.sum(dim=1)
+    sums += 0.01
+
     return exp / exp.sum(dim=1)
 
   @property
@@ -198,6 +202,8 @@ class NCANonlinear:
     # initialize the linear transformation matrix A
     self._init_transformation()
 
+    torch.nn.utils.clip_grad_norm_(self.A, max_norm=0.5)
+
     # zero-mean the input data
     if normalize:
       self._mean = X.mean(dim=0)
@@ -209,7 +215,7 @@ class NCANonlinear:
       'weight_decay': weight_decay,
       'momentum': momentum,
     }
-    optimizer = torch.optim.SGD([*self.feature_extractor.parameters(), self.A], **optim_args)
+    optimizer = torch.optim.SGD([self.A], **optim_args)
     iters_per_epoch = int(np.ceil(self.num_train / batch_size))
     i_global = 0
     for epoch in range(self.max_iters):
@@ -231,6 +237,7 @@ class NCANonlinear:
         loss = self.loss(X_batch, y_mask)
         self._losses.append(loss.item())
         loss.backward()
+        torch.nn.utils.clip_grad_norm_([*self.feature_extractor.parameters(), self.A], max_norm=0.5)
         optimizer.step()
 
         i_global += 1
@@ -328,7 +335,30 @@ class NCALinear:
       numerical stability trick.
     """
     exp = torch.exp(x)
-    return exp / exp.sum(dim=1)
+    if torch.any(torch.isnan(exp)):
+      print("---- NAN detected in _softmax() method ----")
+      print("x: ")
+      print(x)
+      print("x shape:", x.shape)
+      print("--------")
+      print("exp: ")
+      print(exp)
+      print("exp shape:", exp.shape)
+      print("--------")
+      raise Exception("Manual Exception")
+    
+    sums = exp.sum(dim=1)
+    sums += 0.01
+
+    if not sums.all():
+      print("---- 0 denominator detected in _softmax() method ----")
+
+      for i in range(len(sums)):
+        print("sum[" + str(i) + "] = " + str(sums[i]))
+
+      raise Exception("Manual Exception")
+
+    return exp / sums
 
   @property
   def mean(self):
@@ -352,7 +382,36 @@ class NCALinear:
     # compute pairwise squared Euclidean distances
     # in transformed space
     embedding = torch.mm(X, torch.t(self.A))
+
+    if torch.any(torch.isnan(embedding)):
+        print("---- NAN detected in _loss() method inside 'embedding' variable ----")
+        print("X: ")
+        print(X)
+        print("X shape:", X.shape)
+        print("--------")
+        print("A: ")
+        print(self.A)
+        print("A shape:", self.A.shape)
+        print("--------")
+        print("embedding: ")
+        print(embedding)
+        print("embedding shape:", embedding.shape)
+        print("--------")
+        raise Exception("Manual Exception")
+
     distances = self._pairwise_l2_sq(embedding)
+
+    if torch.any(torch.isnan(distances)):
+      print("---- NAN detected in _loss() method inside 'distances' variable ----")
+      print("embedding: ")
+      print(embedding)
+      print("embedding shape:", embedding.shape)
+      print("--------")
+      print("distances: ")
+      print(distances)
+      print("distances shape:", distances.shape)
+      print("--------")
+      raise Exception("Manual Exception")
 
     # fill diagonal values such that exponentiating them
     # makes them equal to 0
@@ -367,12 +426,47 @@ class NCALinear:
     # in the softmax function
     p_ij = self._softmax(-distances)
 
+    if torch.any(torch.isnan(p_ij)):
+      print("---- NAN detected in _loss() method inside 'p_ij' variable ----")
+      print("-distances: ")
+      print(-distances)
+      print("-distances shape:", (-distances).shape)
+      print("--------")
+      print("p_ij: ")
+      print(p_ij)
+      print("p_ij shape:", p_ij.shape)
+      print("--------")
+      dummy_1, dummy_2 = p_ij.shape[0], p_ij.shape[1]
+
+      for i in range(dummy_1):
+        for j in range(dummy_2):
+          if torch.isnan(p_ij[i][j]):
+            print("i: " + str(i) + ", j: " + str(j))
+            print("-distances[i][j]:", (-distances)[i][j])
+
+      raise Exception("Manual Exception")
+
+    if torch.any(torch.isnan(y_mask.float())):
+      print("---- NAN detected in _loss() method inside y_mask.float()")
+      raise Exception("Manual Exception")
+
     # for each p_i, zero out any p_ij that
     # is not of the same class label as i
     p_ij_mask = p_ij * y_mask.float()
 
+    if self.A.grad and torch.any(torch.isnan(self.A.grad)):
+      raise Exception("Yo")
+
+    if torch.any(torch.isnan(p_ij_mask)):
+      print("---- NAN detected in _loss() method inside 'p_ij_mask' variable ----")
+      raise Exception("Manual Exception")
+
     # sum over js to compute p_i
     p_i = p_ij_mask.sum(dim=1)
+
+    if torch.any(torch.isnan(p_i)):
+      print("---- NAN detected in _loss() method inside 'p_i' variable ----")
+      raise Exception("Manual Exception")
 
     # compute expected number of points
     # correctly classified by summing
@@ -384,16 +478,34 @@ class NCALinear:
     # log_sum over non-zero values
     classification_loss = -torch.log(torch.masked_select(p_i, p_i != 0)).sum()
 
+    if torch.any(torch.isnan(classification_loss)):
+      print("---- NAN detected in _loss() method inside 'classification_loss' variable ----")
+      raise Exception("Manual Exception")   
+
     # to prevent the embeddings of different
     # classes from collapsing to the same
     # point, we add a hinge loss penalty
     distances.diagonal().copy_(torch.zeros(len(distances)))
     margin_diff = (1 - distances) * (~y_mask).float()
+
+    if torch.any(torch.isnan(margin_diff)):
+      print("---- NAN detected in _loss() method inside 'margin_diff' variable ----")
+      raise Exception("Manual Exception") 
+
     hinge_loss = torch.clamp(margin_diff, min=0).pow(2).sum(1).mean()
+
+    if torch.any(torch.isnan(hinge_loss)):
+      print("---- NAN detected in _loss() method inside 'hinge_loss' variable ----")
+      raise Exception("Manual Exception") 
 
     # sum both loss terms and return
     loss = classification_loss + hinge_loss
-    return loss
+
+    if torch.any(torch.isnan(loss)):
+      print("---- NAN detected in _loss() method inside 'loss' variable ----")
+      raise Exception("Manual Exception")
+    
+    return loss, classification_loss, hinge_loss
 
   def train(
     self,
@@ -436,6 +548,9 @@ class NCALinear:
     # initialize the linear transformation matrix A
     self._init_transformation()
 
+    # clip gradient norms
+    torch.nn.utils.clip_grad_norm_(self.A, max_norm=0.5)
+
     # zero-mean the input data
     if normalize:
       self._mean = X.mean(dim=0)
@@ -460,19 +575,67 @@ class NCALinear:
         X_batch = X[i*batch_size:(i+1)*batch_size]
         y_batch = y[i*batch_size:(i+1)*batch_size]
 
+        if (torch.any(torch.isnan(X_batch))):
+          print("---- NAN detected in _train() method inside 'X_batch' variable")
+          raise Exception("Manual Exception")
+        
+        if (torch.any(torch.isnan(y_batch))):
+          print("---- NAN detected in _train() method inside 'y_batch' variable")
+          raise Exception("Manual Exception")
+
         # compute pairwise boolean class matrix
         y_mask = y_batch[:, None] == y_batch[None, :]
 
+        if torch.any(torch.isnan(y_mask)):
+          print("---- NAN detected in _train() method inside 'y_mask' variable")
+          raise Exception("Manual Exception")
+
         # compute loss and take gradient step
         optimizer.zero_grad()
-        loss = self.loss(X_batch, y_mask)
+
+        A_curr = optimizer.param_groups[0]['params'][0]
+        if torch.any(torch.isnan(A_curr)):
+          print("---- NAN detected in _train() method inside 'A_curr' variable after optimizer.zero_grad()")
+          raise Exception('Manual Exception')
+
+        loss, classif_loss, hinge_loss = self.loss(X_batch, y_mask)
+
+        A_curr = optimizer.param_groups[0]['params'][0]
+        if torch.any(torch.isnan(A_curr)):
+          print("---- NAN detected in _train() method inside 'A_curr' variable after self.loss()")
+          raise Exception('Manual Exception')
+
         self._losses.append(loss.item())
+
+        A_curr = optimizer.param_groups[0]['params'][0]
+        if torch.any(torch.isnan(A_curr)):
+          print("---- NAN detected in _train() method inside 'A_curr' variable after self._losses.append()")
+          raise Exception('Manual Exception')
+
         loss.backward()
+        # clip gradient norms
+        torch.nn.utils.clip_grad_norm_(self.A, max_norm=0.5)
+
+        if torch.any(torch.isnan(self.A.grad)):
+          print("---- NAN detected in _train() method inside 'self.A.grad' variable after loss.backward()")
+          raise Exception("Manual Exception")
+
+        A_curr = optimizer.param_groups[0]['params'][0]
+        if torch.any(torch.isnan(A_curr)):
+          print("---- NAN detected in _train() method inside 'A_curr' variable after loss.backward()")
+          raise Exception('Manual Exception')
+        
         optimizer.step()
+
+        A_curr = optimizer.param_groups[0]['params'][0]
+        if torch.any(torch.isnan(A_curr)):
+          print("---- NAN detected in _train() method inside 'A_curr' variable after optimizer.step()")
+          raise Exception('Manual Exception')
 
         i_global += 1
         if not i_global % 25:
-          print("epoch: {} - loss: {:.5f}".format(epoch+1, loss.item()))
+          print("epoch: {} - loss: {:.5f}, classification loss: {:.5f}, hinge loss: {:.5f}".format(epoch+1, loss.item(), classif_loss.item(), hinge_loss.item()))
+          # print("epoch: {} - loss: {:.5f}".format(epoch+1, loss.item()))
 
       # check if within convergence
       A_curr = optimizer.param_groups[0]['params'][0]
